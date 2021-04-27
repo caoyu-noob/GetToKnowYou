@@ -7,7 +7,7 @@ from model.common_layer import EncoderLayer, DecoderLayer, MultiHeadAttention, C
     get_input_from_batch, get_output_from_batch
 from .utils import repeat_along_dim1
 from .loss import SoftCrossEntropyLoss
-from .predicate_model import PredicateModel
+from .predicate_model import PredicateModel, PredicateClassifier
 
 class Encoder(nn.Module):
     """
@@ -327,7 +327,9 @@ class TransformerSeq2Seq(nn.Module):
     def __init__(self, emb_dim, hidden_dim, num_layers, heads, depth_size, filter_size, tokenizer,
                  pretrained_file, pointer_gen, logger, weight_sharing=True, model_file_path=None, is_eval=False,
                  load_optim=False, label_smoothing=-1, multi_input=False, context_size=2,
-                 attention_pooling_type='mean', base_model='transformer', max_input_length=512, max_label_length=64):
+                 attention_pooling_type='mean', base_model='transformer', max_input_length=512, max_label_length=64,
+                 dropout_p=0.1
+                 ):
         super(TransformerSeq2Seq, self).__init__()
         self.tokenizer = tokenizer
         self.vocab_size = tokenizer.n_words
@@ -348,12 +350,12 @@ class TransformerSeq2Seq(nn.Module):
             self.generator = Generator(hidden_dim, self.vocab_size, pointer_gen)
         elif base_model == 'gru':
             self.encoder = EncoderRNN(emb_dim, hidden_dim, num_layers=1)
-            self.decoder = AttnDecoderRNN(emb_dim, hidden_dim, hidden_dim, num_layers=1)
+            self.decoder = AttnDecoderRNN(emb_dim, hidden_dim, hidden_dim, num_layers=1, dropout_p=dropout_p)
             self.transformer = False
             self.generator = RNNPointerGenerator(hidden_dim, self.vocab_size, emb_dim)
 
-        self.predicate_model = PredicateModel(hidden_dim, self.n_relations - 1)
-
+        # self.predicate_model = PredicateModel(hidden_dim, self.n_relations - 1)
+        self.predicate_model = PredicateClassifier(hidden_dim, self.n_relations - 1, dropout_p=dropout_p)
 
         self.pad_id = tokenizer.pad_id
         self.n_embeddings = tokenizer.n_words
