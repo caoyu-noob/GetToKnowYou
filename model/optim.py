@@ -156,7 +156,7 @@ class Adam(torch.optim.Optimizer):
 
 class NoamOpt:
     def __init__(self, embeddings_size, warmup, optimizer, linear_schedule=False, lr=None, total_steps=None,
-                 apex_level=None, loss_weight=None, extra_module_lr_rate=1.0):
+                 apex_level=None, loss_weight=None, extra_module_lr_rate=1.0, linear_schedule_min_lr=0.0):
         self.embeddings_size = embeddings_size
         self.warmup = warmup
         self.optimizer = optimizer
@@ -166,6 +166,7 @@ class NoamOpt:
         self.total_steps = total_steps
         self.loss_weight = loss_weight
         self.extra_module_lr_rate = extra_module_lr_rate
+        self.linear_schedule_min_lr = linear_schedule_min_lr
 
         self._step = 0
         
@@ -240,4 +241,5 @@ class NoamOpt:
             step = self._step
         assert self.lr is not None and self.total_steps is not None
 
-        return self.lr * self.warmup_linear(step/self.total_steps, self.warmup)
+        return (self.lr - self.linear_schedule_min_lr) * self.warmup_linear(step/self.total_steps, self.warmup) + \
+               self.linear_schedule_min_lr

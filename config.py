@@ -73,6 +73,7 @@ def get_trainer_config(args):
                        'persona_aug_syn_proba': args.persona_aug_syn_proba,
                        'apex_loss_scale': args.apex_loss_scale, # e.g. '128', 'dynamic'
                        'linear_schedule': args.linear_schedule,
+                       'linear_schedule_min_lr': args.linear_schedule_min_lr,
                        'evaluate_full_sequences': args.evaluate_full_sequences,
                        'limit_eval_size': args.limit_eval_size,
                        'limit_train_size': args.limit_train_size,
@@ -146,6 +147,8 @@ class InputConfig():
         parser.add_argument('--zero_shot', action='store_true')
         parser.add_argument('--persona_augment', action='store_true')
         parser.add_argument('--linear_schedule', default=True, type=bool)
+        parser.add_argument('--linear_schedule_min_lr', default=0.0, type=float, help="The minimum lr for optimizer in "
+                                                                                      "linear schedule")
         parser.add_argument('--evaluate_full_sequences', default=True, type=bool)
         parser.add_argument('--n_epochs', default=3, type=int)
         parser.add_argument('--patience', default=-1, type=int, help="the training patience if the dev result "
