@@ -39,22 +39,24 @@ class Seq2seqTokenizer:
         text = ' '.join(res)
         return text
 
-    def index_words(self, sentence):
+    def index_words(self, sentence, special_tokens=False):
         if isinstance(sentence, str):
             for word in sentence.split(' '):
-                self.index_word(word)
+                self.index_word(word, special_tokens)
         if isinstance(sentence, list):
             for word in sentence:
-                self.index_word(word)
+                self.index_word(word, special_tokens)
 
-    def index_word(self, word):
+    def index_word(self, word, special_token):
         if not self.word2idx.__contains__(word):
             self.word2idx[word] = self.n_words
             self.idx2word[self.n_words] = word
+            if special_token:
+                self.all_special_ids.append(self.n_words)
             self.n_words += 1
 
     def update_relation(self, relations):
-        self.index_words(relations)
+        self.index_words(relations, special_tokens=True)
         self.n_relations = len(relations)
         self.no_relation_id = self.word2idx[self.NO_RELATION]
 

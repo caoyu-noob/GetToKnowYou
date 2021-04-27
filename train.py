@@ -37,12 +37,13 @@ def get_model_and_tokenizer(args, trainer_config, logger):
     args.dialog_embeddings = False
     if args.model_type == 'seq2seq':
         model = TransformerSeq2Seq(args.emb_dim, args.hidden_dim, args.num_layers, args.heads, args.depth_size,
-                               args.filter_size, tokenizer, args.pretrained_emb_file,
-                               args.pointer_gen, logger, label_smoothing=args.label_smoothing)
+                               args.filter_size, tokenizer, args.pretrained_emb_file, args.pointer_gen, logger,
+                               char_pretrained_file=args.pretrained_char_emb_file, label_smoothing=args.label_smoothing)
     else:
         model = TransformerSeq2Seq(args.emb_dim, args.hidden_dim, args.num_layers, args.heads, args.depth_size,
-                                   args.filter_size, tokenizer, args.pretrained_emb_file,
-                                   args.pointer_gen, logger, base_model='gru', label_smoothing=args.label_smoothing)
+                                   args.filter_size, tokenizer, args.pretrained_emb_file, args.pointer_gen, logger,
+                                   char_pretrained_file=args.pretrained_char_emb_file, base_model='gru',
+                                   label_smoothing=args.label_smoothing)
     return model, tokenizer
 
 '''Modify the model to make it fit the data'''

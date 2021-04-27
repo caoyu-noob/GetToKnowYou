@@ -238,23 +238,79 @@ class RNNPointerGenerator(nn.Module):
         logits = torch.log(vocab_dist_.scatter_add(1, input_ids, p_attn_dist) + 1e-40)
         return logits
 
-class Embedding:
-    def __init__(self, tokenizer, emb_size, pretrained_file, logger):
+class Embedding():
+    CHAR_EMBEDDING_SIZE = 100
+
+    def __init__(self, tokenizer, emb_size, pretrained_file, char_pretrained_file, logger):
         self.emb_size = emb_size
-        self.embedding = nn.Embedding(tokenizer.n_words, emb_size)
         self.logger = logger
         self.tokenizer = tokenizer
-        self.get_pretrained_embedding(pretrained_file)
+        self.char_emb = False
+        if char_pretrained_file is not None:
+            self.char_emb = True
+        self.get_pretrained_embedding(pretrained_file, char_pretrained_file)
 
-    def get_pretrained_embedding(self, pretrained_file):
+    def get_pretrained_embedding(self, pretrained_file, char_pretrained_file):
+        word_embedding = self.get_word_pretrained_embedding(pretrained_file)
+        if self.char_emb:
+            char_embeddings = self.get_char_pretrained_embedding(char_pretrained_file)
+            word_embedding = torch.cat((word_embedding, char_embeddings), 1)
+        self.embedding = nn.Embedding.from_pretrained(word_embedding)
+
+    def get_word_pretrained_embedding(self, pretrained_file):
         self.logger.info('Loading embedding from %s', pretrained_file)
+        word_emb_dim = self.emb_size - self.CHAR_EMBEDDING_SIZE if self.char_emb else self.emb_size
+        embedding_weight = torch.randn((self.tokenizer.n_words, word_emb_dim))
         for line in open(pretrained_file, encoding='utf-8').readlines():
             items = line.split()
-            if (len(items) == self.emb_size + 1):
+            if (len(items) == word_emb_dim + 1):
                 if self.tokenizer.word2idx.__contains__(items[0]):
-                    self.embedding.weight.data[self.tokenizer.word2idx[items[0]]] = \
-                        torch.tensor([float(x) for x in items[1:]])
-        self.embedding.weight.data.requires_grad = True
+                    embedding_weight[self.tokenizer.word2idx[items[0]]] = torch.tensor([float(x) for x in items[1:]])
+        return embedding_weight
+        #     if self.char_emb:
+        #         if (len(items) == self.emb_size - self.CHAR_EMBEDDING_SIZE + 1):
+        #             if self.tokenizer.word2idx.__contains__(items[0]):
+        #                 self.embedding.weight.data[self.tokenizer.word2idx[items[0]], :self.emb_size - self.CHAR_EMBEDDING_SIZE ] = \
+        #                     torch.tensor([float(x) for x in items[1:]])
+        #     else:
+        #         if (len(items) == self.emb_size + 1):
+        #             if self.tokenizer.word2idx.__contains__(items[0]):
+        #                 self.embedding.weight.data[self.tokenizer.word2idx[items[0]]] = \
+        #                     torch.tensor([float(x) for x in items[1:]])
+        # self.embedding.weight.data.requires_grad = True
+
+    def get_char_pretrained_embedding(self, char_pretrained_file):
+        self.logger.info('Loading char embedding from %s', char_pretrained_file)
+        ## obtain all char n-grams needed for current dataset and build the relationships between them and each token
+        n_gram_to_idx_dict, idx_to_n_gram_list, token_to_gram_list = {}, [], []
+        n_gram_cnt = 0
+        for index in range(self.tokenizer.n_words):
+            token = self.tokenizer.idx2word[index]
+            chars = ['#BEGIN#'] + list(token) + ['#END#']
+            cur_gram_list = []
+            for n in [2, 3, 4]:
+                end = len(chars) - n + 1
+                grams = [chars[i:(i + n)] for i in range(end)]
+                for gram in grams:
+                    gram_key = '{}gram-{}'.format(n, ''.join(gram))
+                    if not n_gram_to_idx_dict.__contains__(gram_key):
+                        n_gram_to_idx_dict[gram_key] = n_gram_cnt
+                        idx_to_n_gram_list.append(gram_key)
+                        n_gram_cnt += 1
+                    cur_gram_list.append(n_gram_to_idx_dict[gram_key])
+            token_to_gram_list.append(cur_gram_list)
+        ## Read ngram embedding vector for each n-gram
+        char_vectors = torch.Tensor(len(idx_to_n_gram_list), self.CHAR_EMBEDDING_SIZE).zero_()
+        for line in open(char_pretrained_file, encoding='utf-8').readlines():
+            items = line.split()
+            if (len(items) == self.CHAR_EMBEDDING_SIZE + 1) and n_gram_to_idx_dict.__contains__(items[0]):
+                char_vectors[n_gram_to_idx_dict[items[0]]] = torch.tensor([float(x) for x in items[1:]])
+        ## Obtain char embedding for each token by adding all n-gram char embedding it contains
+        char_embeddings = torch.randn((self.tokenizer.n_words, self.CHAR_EMBEDDING_SIZE))
+        for index, n_grams in enumerate(token_to_gram_list):
+            selected_vectors = torch.index_select(char_vectors, 0, torch.tensor(n_grams, dtype=torch.long))
+            char_embeddings[index] = torch.mean(selected_vectors, 0)
+        return char_embeddings
 
     def get_embedding(self):
         return self.embedding
@@ -264,7 +320,7 @@ class EncoderRNN(nn.Module):
         super(EncoderRNN, self).__init__()
         self.hidden_size = hidden_size
         # self.embedding = nn.Embedding(input_size, hidden_size)
-        self.rnn = nn.GRU(hidden_size, hidden_size, num_layers=num_layers, bidirectional=True)
+        self.rnn = nn.GRU(input_size, hidden_size, num_layers=num_layers, bidirectional=True)
         self.fc = nn.Linear(hidden_size * 2, hidden_size)
 
     def forward(self, input_emb, mask_enc, hidden=None):
@@ -325,15 +381,16 @@ class AttnDecoderRNN(nn.Module):
 class TransformerSeq2Seq(nn.Module):
 
     def __init__(self, emb_dim, hidden_dim, num_layers, heads, depth_size, filter_size, tokenizer,
-                 pretrained_file, pointer_gen, logger, weight_sharing=True, model_file_path=None, is_eval=False,
-                 load_optim=False, label_smoothing=-1, multi_input=False, context_size=2,
-                 attention_pooling_type='mean', base_model='transformer', max_input_length=512, max_label_length=64):
+                 pretrained_file, pointer_gen, logger, char_pretrained_file=None, weight_sharing=True,
+                 model_file_path=None, is_eval=False, load_optim=False, label_smoothing=-1, multi_input=False,
+                 context_size=2, attention_pooling_type='mean', base_model='transformer', max_input_length=512,
+                 max_label_length=64):
         super(TransformerSeq2Seq, self).__init__()
         self.tokenizer = tokenizer
         self.vocab_size = tokenizer.n_words
         self.n_relations = tokenizer.n_relations
 
-        self.embed_obj = Embedding(tokenizer, emb_dim, pretrained_file, logger)
+        self.embed_obj = Embedding(tokenizer, emb_dim, pretrained_file, char_pretrained_file, logger)
 
         self.embedding = self.embed_obj.get_embedding()
 

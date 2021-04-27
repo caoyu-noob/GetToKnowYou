@@ -179,6 +179,8 @@ class InputConfig():
         parser.add_argument('--filter_size', default=50, type=int, help='Config for Seq2Seq model')
         parser.add_argument('--pointer_gen', action='store_true', help='Config for Seq2Seq model')
         parser.add_argument('--pretrained_emb_file', default='./glove/glove.6B.300d.txt', type=str)
+        parser.add_argument('--pretrained_char_emb_file', default=None, type=str, help="Indicate the char embedding "
+                               "file that will be used, otherwise no char embedding will be used")
         parser.add_argument('--vocab_path', default='./datasets/persona_vocab.bin', type=str)
         parser.add_argument('--train_datasets', default='datasets/ConvAI2/train_self_original.txt', type=str)
         parser.add_argument('--valid_datasets', default='datasets/ConvAI2/valid_self_original.txt', type=str)
