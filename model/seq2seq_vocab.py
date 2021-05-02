@@ -106,7 +106,12 @@ class Seq2seqVocab:
                             #             triple_item.startswith("[\'"):
                             #         triple_items[j] = triple_item.replace("'", "\"")
                             # triple = json.loads(','.join(triple_items))
-                            triple = eval(items[i])
+                            string = items[i]
+                            string = string.replace('\', \'', '\", \"')
+                            string = string.replace('\',\'', '\",\"')
+                            string = string.replace('[\'', '[\"')
+                            string = string.replace('\']', '\"]')
+                            triple = eval(string)
                             labels.append(triple[1])
                             triples.append(triple)
                     data.append([items[1], labels, triples])

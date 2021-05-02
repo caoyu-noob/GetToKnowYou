@@ -112,7 +112,12 @@ class FacebookDataset(Dataset):
                 triples = []
                 if len(items) > 2:
                     for i in range(2, len(items)):
-                        triple = eval(items[i])
+                        string = items[i]
+                        string = string.replace('\', \'', '\", \"')
+                        string = string.replace('\',\'', '\",\"')
+                        string = string.replace('[\'', '[\"')
+                        string = string.replace('\']', '\"]')
+                        triple = eval(string)
                         labels.append(triple[1])
                         triples.append(triple)
                 data.append([items[1], labels, triples])
