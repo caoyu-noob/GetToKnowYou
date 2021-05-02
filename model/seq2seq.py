@@ -473,6 +473,7 @@ class TransformerSeq2Seq(nn.Module):
 
         predicate_logits = self.predicate_model(encoder_hidden_state)
         s2s_loss = torch.tensor(0)
+        s2s_loss = s2s_loss.to(input_ids.device)
         if predicate_labels is not None and targets is not None:
             if logits is not None:
                 shifted_logits = logits[:, :-1, :].contiguous()
