@@ -383,12 +383,15 @@ class TransformerSeq2Seq(nn.Module):
     def __init__(self, emb_dim, hidden_dim, num_layers, heads, depth_size, filter_size, tokenizer,
                  pretrained_file, pointer_gen, logger, char_pretrained_file=None, weight_sharing=True,
                  model_file_path=None, is_eval=False, load_optim=False, label_smoothing=-1, multi_input=False,
-                 context_size=2, attention_pooling_type='mean', base_model='transformer', max_input_length=512,
+                 context_size=2, attention_pooling_type='mean', base_model='transformer',
+                 predicate_model_type='linear',
+                 max_input_length=512,
                  max_label_length=64, dropout_p=0.1):
         super(TransformerSeq2Seq, self).__init__()
         self.tokenizer = tokenizer
         self.vocab_size = tokenizer.n_words
         self.n_relations = tokenizer.n_relations
+        self.predicate_model_type = predicate_model_type
 
         self.embed_obj = Embedding(tokenizer, emb_dim, pretrained_file, char_pretrained_file, logger)
 
@@ -409,8 +412,11 @@ class TransformerSeq2Seq(nn.Module):
             self.transformer = False
             self.generator = RNNPointerGenerator(hidden_dim, self.vocab_size, emb_dim)
 
-        # self.predicate_model = PredicateModel(hidden_dim, self.n_relations - 1)
-        self.predicate_model = PredicateClassifier(hidden_dim, self.n_relations - 1, dropout_p=dropout_p)
+        if self.predicate_model_type == 'linear':
+            self.predicate_model_linear = PredicateModel(hidden_dim, self.n_relations - 1)
+        elif self.predicate_model_type == 'memnet':
+            self.predicate_model = PredicateClassifier(hidden_dim, self.n_relations - 1, dropout_p=dropout_p)
+            # self.predicate_model = PredicateClassifier(hidden_dim, self.vocab_size, dropout_p=dropout_p)
 
         self.pad_id = tokenizer.pad_id
         self.n_embeddings = tokenizer.n_words
@@ -423,7 +429,7 @@ class TransformerSeq2Seq(nn.Module):
             self.generator.proj.weight = self.embedding.weight
 
         self.criterion = nn.NLLLoss(ignore_index=self.pad_id)
-        self.criterion_predicate = nn.BCELoss(reduction='sum')
+        self.criterion_predicate = nn.BCELoss(reduction='mean')
         self.criterion_ppl = None
         if label_smoothing > 0:
             self.criterion = LabelSmoothing(size=self.vocab_size, padding_idx=self.pad_id, smoothing=label_smoothing)
@@ -435,14 +441,26 @@ class TransformerSeq2Seq(nn.Module):
             self.embedding = self.embedding.eval()
 
     def forward(self, input_ids, decoder_index, predicate_labels=None, targets=None, output_logits=False,
-                output_encoder=False):
+                output_encoder=False,
+                persona_ids=None,
+                ):
+        '''
+
+        :param input_ids: (bsz, len)
+        :param decoder_index: (varied_n_samples_with_triples)
+        :param predicate_labels: (bsz, n_relations)
+        :param targets: (varied_n_samples_with_triples, varied_triple_len)
+        :param output_logits:
+        :param output_encoder:
+        :return:
+        '''
         # input_ids = input_ids[:, -self.max_input_length:]
         # labels = labels[:, -self.max_label_length:]
         label_embeddings, mask_target, logits = None, None, None
         if targets.size(0) != 0:
-            label_embeddings = self.embedding(targets)
+            label_embeddings = self.embedding(targets)  # (varied_n_samples_with_triples, varied_triple_len, embed_size)
             mask_target = targets.data.eq(self.pad_id).unsqueeze(1)
-        input_embeddings = self.embedding(input_ids)
+        input_embeddings = self.embedding(input_ids)  # (bsz, seq_len, embed_size)
         mask_enc = input_ids.data.eq(self.pad_id).unsqueeze(1)
         if self.transformer:
             encoder_outputs = self.encoder(input_embeddings, mask_enc)
@@ -453,9 +471,13 @@ class TransformerSeq2Seq(nn.Module):
             encoder_outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(encoder_outputs)
             if label_embeddings is not None:
                 decoder_input = label_embeddings[:, 0, :]
+                # (seq_len, bsz, hidden_size * n_direction) -> (seq_len, varied_n_sample_with_triples, hidden_size * n_direction)
                 selected_encoder_outputs = torch.index_select(encoder_outputs, 1, decoder_index)
+                # (bsz, 1, seq_len) -> (varied_n_samples_with_triples, 1, seq_len)
                 selected_mask_enc = torch.index_select(mask_enc, 0, decoder_index)
+                # (bsz, seq_len) -> (varied_n_samples_with_triples, seq_len)
                 selected_input_ids = torch.index_select(input_ids, 0, decoder_index)
+                # (bsz, hidden_size * n_direction) -> (varied_n_samples_with_triples, hidden_size * n_direction)
                 decoder_hidden_state = torch.index_select(encoder_hidden_state, 0, decoder_index)
                 logits = None
                 target_length = targets.size(1)
@@ -471,7 +493,14 @@ class TransformerSeq2Seq(nn.Module):
                         logits = torch.cat((logits, pre_logits.unsqueeze(1)), dim=1)
                 logits = torch.cat((logits, pre_logits.unsqueeze(1)), dim=1)
 
-        predicate_logits = self.predicate_model(encoder_hidden_state)
+        if self.predicate_model_type == 'linear':
+            predicate_logits = self.predicate_model_linear(encoder_hidden_state)
+        elif self.predicate_model_type == 'memnet':
+            if persona_ids is None: mem_input_ids = input_ids
+            else: mem_input_ids = persona_ids
+            predicate_logits = self.predicate_model(mem_input_ids, encoder_hidden_state)
+        else:
+            raise Exception
         s2s_loss = torch.tensor(0)
         s2s_loss = s2s_loss.to(input_ids.device)
         if predicate_labels is not None and targets is not None:
@@ -479,6 +508,8 @@ class TransformerSeq2Seq(nn.Module):
                 shifted_logits = logits[:, :-1, :].contiguous()
                 shifted_targets = targets[:, 1:].contiguous()
                 s2s_loss = self.criterion(shifted_logits.view(-1, shifted_logits.size(-1)), shifted_targets.view(-1))
+            # print('\npredicate_logits" {}'.format(predicate_logits))
+            # print('\npredicate_labels: {}, {}'.format(predicate_labels, torch.sum(predicate_labels, dim=1)))
             predicate_loss = self.criterion_predicate(predicate_logits, predicate_labels)
             return_value = (s2s_loss, predicate_loss)
             if output_logits:
@@ -487,6 +518,7 @@ class TransformerSeq2Seq(nn.Module):
                 return_value = return_value + ((encoder_outputs, encoder_hidden_state, mask_enc))
             return return_value
         else:
+
             return logits, predicate_logits
 
         #     target_length = labels.size(1)
