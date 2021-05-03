@@ -742,7 +742,7 @@ class TransformerSeq2Seq(nn.Module):
                 if all(is_end.view(-1)):
                     break
 
-                beam_scores *= penalty
+                # beam_scores *= penalty
                 current_sample_prob *= self.annealing
 
             predicts = []
