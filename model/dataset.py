@@ -115,6 +115,8 @@ class FacebookDataset(Dataset):
                         string = items[i]
                         string = string.replace('\', \'', '\", \"')
                         string = string.replace('\',\'', '\",\"')
+                        string = string.replace('\', \"', '\",\"')
+                        string = string.replace('\", \'', '\",\"')
                         string = string.replace('[\'', '[\"')
                         string = string.replace('\']', '\"]')
                         triple = eval(string)

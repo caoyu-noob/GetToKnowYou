@@ -13,6 +13,30 @@ class PredicateModel(nn.Module):
         output_state = self.linear(input_state)
         return F.sigmoid(output_state)
 
+class NewPredicateClassifier(nn.Module):
+    def __init__(self, hidden_dim, relation_types, hop=3, dropout_p=0.1):
+        super(NewPredicateClassifier, self).__init__()
+        self.max_hops = hop
+
+        self.dropout = nn.Dropout(dropout_p)
+
+        self.Cs = nn.ParameterList()
+        for hop in range(self.max_hops):
+            cur_weight = 0.1 * torch.randn((relation_types, hidden_dim))
+            self.Cs.append(nn.Parameter(cur_weight))
+        self.softmax = nn.Softmax(dim=1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, hidden_state):
+        u = [hidden_state]  # [(bsz, hidden_size)]
+        for hop in range(self.max_hops):
+            if hop != self.max_hops - 1:
+                alpha = self.softmax(torch.mm(u[-1], self.Cs[hop].transpose(1, 0))) # (bsz, J) eq(1)
+                o_k = torch.sum(alpha.unsqueeze(-1) * self.Cs[hop + 1].unsqueeze(0), 1) # (bsz, hidden_size) eq.(2)
+                u.append(self.dropout(u[-1] + o_k)) # eq.(3)
+            else:
+                alpha = self.sigmoid(torch.mm(u[-1], self.Cs[hop].transpose(1, 0)))
+                return alpha
 
 class PredicateClassifier(nn.Module):
     ''' Source: https://github.com/HLTCHKUST/Mem2Seq '''

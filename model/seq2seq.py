@@ -7,7 +7,7 @@ from model.common_layer import EncoderLayer, DecoderLayer, MultiHeadAttention, C
     get_input_from_batch, get_output_from_batch
 from .utils import repeat_along_dim1
 from .loss import SoftCrossEntropyLoss
-from .predicate_model import PredicateModel, PredicateClassifier
+from .predicate_model import PredicateModel, PredicateClassifier, NewPredicateClassifier
 
 class Encoder(nn.Module):
     """
@@ -238,35 +238,42 @@ class RNNPointerGenerator(nn.Module):
         logits = torch.log(vocab_dist_.scatter_add(1, input_ids, p_attn_dist) + 1e-40)
         return logits
 
-class Embedding():
+class Embedding(nn.Module):
     CHAR_EMBEDDING_SIZE = 100
 
     def __init__(self, tokenizer, emb_size, pretrained_file, char_pretrained_file, logger):
+        super(Embedding, self).__init__()
         self.emb_size = emb_size
         self.logger = logger
         self.tokenizer = tokenizer
+        self.no_relation_id = tokenizer.no_relation_id
         self.char_emb = False
         if char_pretrained_file is not None:
             self.char_emb = True
-        self.get_pretrained_embedding(pretrained_file, char_pretrained_file)
+        self.embedding, self.relation_embedding = self.get_pretrained_embedding(pretrained_file, char_pretrained_file)
 
     def get_pretrained_embedding(self, pretrained_file, char_pretrained_file):
-        word_embedding = self.get_word_pretrained_embedding(pretrained_file)
+        word_embedding_weight, relation_embedding_weight = self.get_word_pretrained_embedding(pretrained_file)
         if self.char_emb:
             char_embeddings = self.get_char_pretrained_embedding(char_pretrained_file)
-            word_embedding = torch.cat((word_embedding, char_embeddings), 1)
-        self.embedding = nn.Embedding.from_pretrained(word_embedding)
+            word_embedding_weight = torch.cat((word_embedding_weight, char_embeddings[:word_embedding_weight.size(0),:]), 1)
+            relation_embedding_weight = torch.cat((relation_embedding_weight, char_embeddings[self.tokenizer.no_relation_id + 1:, :]), 1)
+        embedding = nn.Embedding.from_pretrained(word_embedding_weight)
+        relation_embedding = nn.Embedding.from_pretrained(relation_embedding_weight)
+        return embedding, relation_embedding
 
     def get_word_pretrained_embedding(self, pretrained_file):
         self.logger.info('Loading embedding from %s', pretrained_file)
         word_emb_dim = self.emb_size - self.CHAR_EMBEDDING_SIZE if self.char_emb else self.emb_size
-        embedding_weight = torch.randn((self.tokenizer.n_words, word_emb_dim))
+        embedding_weight = torch.randn((self.tokenizer.no_relation_id, word_emb_dim))
+        relation_embedding_weight = torch.randn((self.tokenizer.n_relations - 1, word_emb_dim))
         for line in open(pretrained_file, encoding='utf-8').readlines():
             items = line.split()
             if (len(items) == word_emb_dim + 1):
-                if self.tokenizer.word2idx.__contains__(items[0]):
+                if self.tokenizer.word2idx.__contains__(items[0]) and \
+                        self.tokenizer.word2idx[items[0]] < self.tokenizer.no_relation_id:
                     embedding_weight[self.tokenizer.word2idx[items[0]]] = torch.tensor([float(x) for x in items[1:]])
-        return embedding_weight
+        return embedding_weight, relation_embedding_weight
         #     if self.char_emb:
         #         if (len(items) == self.emb_size - self.CHAR_EMBEDDING_SIZE + 1):
         #             if self.tokenizer.word2idx.__contains__(items[0]):
@@ -313,7 +320,23 @@ class Embedding():
         return char_embeddings
 
     def get_embedding(self):
-        return self.embedding
+        return self.embedding, self.relation_embedding
+
+    def forward(self, input_ids, is_target=False):
+        assert len(input_ids.size()) <= 2
+        if is_target and len(input_ids.size()) == 2:
+            relation_embeddings = self.relation_embedding(
+                input_ids[:, 0] - (self.tokenizer.no_relation_id + 1) * torch.ones_like(input_ids[:, 0]))
+            output_embeddings = self.embedding(
+                input_ids[:, 1:])  # (varied_n_samples_with_triples, varied_triple_len, embed_size)
+            output_embeddings = torch.cat((relation_embeddings.unsqueeze(1), output_embeddings), 1)
+        else:
+            if is_target:
+                output_embeddings = self.relation_embedding(
+                    input_ids - (self.tokenizer.no_relation_id + 1) * torch.ones_like(input_ids))
+            else:
+                output_embeddings = self.embedding(input_ids)
+        return output_embeddings
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers=2):
@@ -384,18 +407,16 @@ class TransformerSeq2Seq(nn.Module):
                  pretrained_file, pointer_gen, logger, char_pretrained_file=None, weight_sharing=True,
                  model_file_path=None, is_eval=False, load_optim=False, label_smoothing=-1, multi_input=False,
                  context_size=2, attention_pooling_type='mean', base_model='transformer',
-                 predicate_model_type='linear',
+                 predicate_model_type='memnet',
                  max_input_length=512,
                  max_label_length=64, dropout_p=0.1):
         super(TransformerSeq2Seq, self).__init__()
         self.tokenizer = tokenizer
-        self.vocab_size = tokenizer.n_words
+        self.vocab_size = tokenizer.n_words - tokenizer.n_relations
         self.n_relations = tokenizer.n_relations
         self.predicate_model_type = predicate_model_type
 
-        self.embed_obj = Embedding(tokenizer, emb_dim, pretrained_file, char_pretrained_file, logger)
-
-        self.embedding = self.embed_obj.get_embedding()
+        self.embedding = Embedding(tokenizer, emb_dim, pretrained_file, char_pretrained_file, logger)
 
         if base_model == 'transformer':
             self.encoder = Encoder(emb_dim, hidden_dim, num_layers=num_layers, num_heads=heads,
@@ -415,7 +436,9 @@ class TransformerSeq2Seq(nn.Module):
         if self.predicate_model_type == 'linear':
             self.predicate_model_linear = PredicateModel(hidden_dim, self.n_relations - 1)
         elif self.predicate_model_type == 'memnet':
-            self.predicate_model = PredicateClassifier(hidden_dim, self.n_relations - 1, dropout_p=dropout_p)
+            self.predicate_model = NewPredicateClassifier(hidden_dim, self.n_relations - 1, dropout_p=dropout_p)
+            self.predicate_model.Cs[0] = self.embedding.relation_embedding.weight
+            # self.predicate_model = PredicateClassifier(hidden_dim, self.n_relations - 1, dropout_p=dropout_p)
             # self.predicate_model = PredicateClassifier(hidden_dim, self.vocab_size, dropout_p=dropout_p)
 
         self.pad_id = tokenizer.pad_id
@@ -426,7 +449,7 @@ class TransformerSeq2Seq(nn.Module):
 
         if weight_sharing and emb_dim == hidden_dim:
             # Share the weight matrix between target word embedding & the final logit dense layer
-            self.generator.proj.weight = self.embedding.weight
+            self.generator.proj.weight = self.embedding.embedding.weight
 
         self.criterion = nn.NLLLoss(ignore_index=self.pad_id)
         self.criterion_predicate = nn.BCELoss(reduction='mean')
@@ -458,7 +481,7 @@ class TransformerSeq2Seq(nn.Module):
         # labels = labels[:, -self.max_label_length:]
         label_embeddings, mask_target, logits = None, None, None
         if targets.size(0) != 0:
-            label_embeddings = self.embedding(targets)  # (varied_n_samples_with_triples, varied_triple_len, embed_size)
+            label_embeddings = self.embedding(targets, is_target=True)
             mask_target = targets.data.eq(self.pad_id).unsqueeze(1)
         input_embeddings = self.embedding(input_ids)  # (bsz, seq_len, embed_size)
         mask_enc = input_ids.data.eq(self.pad_id).unsqueeze(1)
@@ -498,7 +521,7 @@ class TransformerSeq2Seq(nn.Module):
         elif self.predicate_model_type == 'memnet':
             if persona_ids is None: mem_input_ids = input_ids
             else: mem_input_ids = persona_ids
-            predicate_logits = self.predicate_model(mem_input_ids, encoder_hidden_state)
+            predicate_logits = self.predicate_model(encoder_hidden_state)
         else:
             raise Exception
         s2s_loss = torch.tensor(0)
@@ -643,12 +666,15 @@ class TransformerSeq2Seq(nn.Module):
                 is_end = torch.zeros(batch_size, 1, dtype=torch.bool, device=device)
                 for i in range(self.max_seq_len):
                     if self.transformer:
-                        label_embeddings = self.embedding(prevs)
+                        label_embeddings = self.embedding(prevs, is_target=True)
                         mask_target = prevs.data.eq(self.pad_id).unsqueeze(1)
                         pre_logits, attn_dist = self.decoder(label_embeddings, encoder_outputs, mask_enc, mask_target)
                         logits = self.generator(pre_logits, attn_dist, enc_batch_extend_vocab=input_ids)[:, -1:, :]
                     else:
-                        label_embeddings = self.embedding(prevs[:, -1])
+                        if i == 0:
+                            label_embeddings = self.embedding(prevs[:, -1], is_target=True)
+                        else:
+                            label_embeddings = self.embedding(prevs[:, -1])
                         decoder_output, hidden_state = self.decoder(label_embeddings, hidden_state, encoder_outputs,
                                                                     mask_enc)
                         logits = self.generator(decoder_output)
@@ -702,13 +728,16 @@ class TransformerSeq2Seq(nn.Module):
 
             for i in range(self.max_seq_len):
                 if self.transformer:
-                    label_embeddings = self.embedding(prevs)
+                    label_embeddings = self.embedding(prevs, is_target=True)
                     mask_target = prevs.data.eq(self.pad_id).unsqueeze(1)
                     pre_logits, attn_dist = self.decoder(label_embeddings, encoder_outputs, beam_mask_enc, mask_target,
                                                          get_attention)
                     logits = self.generator(pre_logits, attn_dist, enc_batch_extend_vocab=beam_input_ids)[:, -1:, :]
                 else:
-                    decoder_input = self.embedding(prevs[:, -1])
+                    if i == 0:
+                        decoder_input = self.embedding(prevs[:, -1], is_target=True)
+                    else:
+                        decoder_input = self.embedding(prevs[:, -1])
                     decoder_output, decoder_hidden_state, attn_weights = self.decoder(decoder_input,
                                                                                       decoder_hidden_state,
                                                                                       selected_encoder_outputs,
@@ -720,24 +749,24 @@ class TransformerSeq2Seq(nn.Module):
                 probs = probs.view(batch_size, self.beam_size, -1)
 
                 beam_scores = self._get_beam_scores(probs, beam_scores, is_end)
-                penalty = self._length_penalty(beam_lens.float() + 1 - is_end.float()).unsqueeze(-1)
+                # penalty = self._length_penalty(beam_lens.float() + 1 - is_end.float()).unsqueeze(-1)
                 # beam_scores = beam_scores / penalty
 
                 if i == 0:
-                    penalty = penalty[:, 0, :]
+                    # penalty = penalty[:, 0, :]
                     beam_scores = beam_scores[:, 0, :]
 
                     beam_scores, idxs = beam_scores.topk(self.beam_size, dim=-1)
                     beam_idxs = torch.zeros((batch_size, self.beam_size), dtype=torch.long, device=device)
                 else:
-                    penalty = penalty.view(batch_size, self.diversity_groups, group_size, -1)
+                    # penalty = penalty.view(batch_size, self.diversity_groups, group_size, -1)
                     beam_scores = beam_scores.view(batch_size, self.diversity_groups, group_size, -1)
 
                     all_scores, all_idxs = [], []
                     for g in range(self.diversity_groups):
                         g_beam_scores = beam_scores[:, g, :, :]
-                        g_penalty = penalty[:, g, :, :]
-                        g_beam_scores -= self.diversity_coef * diversity_penalty.unsqueeze(1) / g_penalty
+                        # g_penalty = penalty[:, g, :, :]
+                        # g_beam_scores -= self.diversity_coef * diversity_penalty.unsqueeze(1) / g_penalty
                         g_beam_scores = g_beam_scores.view(batch_size, -1)
 
                         g_scores, g_idxs = self._sample(g_beam_scores, group_size, sample_prob=current_sample_prob)
@@ -751,7 +780,7 @@ class TransformerSeq2Seq(nn.Module):
                                                        torch.ones((batch_size, group_size), device=device))
 
                     diversity_penalty.fill_(0)
-                    penalty = penalty.view(batch_size, -1)
+                    # penalty = penalty.view(batch_size, -1)
                     beam_scores = torch.cat(all_scores, dim=-1)
                     idxs = torch.cat(all_idxs, dim=-1)
 
