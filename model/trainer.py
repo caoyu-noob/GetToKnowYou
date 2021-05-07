@@ -256,6 +256,7 @@ class Trainer:
         metrics['full_loss'] = (metrics['full_loss'] * index +
                         (self.loss_lambda * results[1].item() + ((1 - self.loss_lambda) * results[0].item()))) / (index + 1)
         predict_predicate = (results[3] >= 0.5).float()
+        predict_predicate += (self.tokenizer.no_relation_id + 1)
         predict_predicate_num = torch.sum(predict_predicate).item()
         predict_predicate_acc_num = torch.sum((predict_predicate == predicate_labels) * predicate_labels).item()
         predicate_label_num = torch.sum(predicate_labels).item()
