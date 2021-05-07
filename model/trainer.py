@@ -306,8 +306,7 @@ class Trainer:
         ## Obtain the predictions for each sample using the predicted predicate
         nonzero_index = predict_predicate.nonzero()
         if nonzero_index.size(0) > 0:
-            start_ids = nonzero_index[:, 1:]
-            start_ids += (self.tokenizer.no_relation_id + 1)
+            start_ids = nonzero_index[:, 1:] + self.tokenizer.no_relation_id + 1
             predict_decoder_index = nonzero_index[:, 0]
             model_predictions = self.model.inference(input_ids, encoder_outputs_list, predict_decoder_index, start_ids)
             for i in range(len(model_predictions)):

@@ -101,6 +101,7 @@ def get_trainer_config(args):
                        'patience': args.patience,
                        'data_type': args.data_type,
                        'loss_lambda': args.loss_lambda,
+                       'predicate_threshold': args.predicate_threshold,
                        })
 
     local_config = deepcopy(config)
@@ -207,5 +208,6 @@ class InputConfig():
         parser.add_argument('--model_saving_interval', type=int, default=10, help='model saving interval for seq2seq')
 
         parser.add_argument('--loss_lambda', type=float, default=0.5, help="The lambda to weigh the s2s loss and predicate loss")
+        parser.add_argument('--predicate_threshold', type=float, default=0.1, help="The threshold of predicate prediction during inference.")
 
         self.args = parser.parse_args()
