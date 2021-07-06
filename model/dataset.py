@@ -24,8 +24,6 @@ import fasttext
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
-from transformers.tokenization_gpt2 import GPT2Tokenizer
-from transformers.tokenization_openai import OpenAIGPTTokenizer
 
 from model.seq2seq_vocab import Seq2seqTokenizer
 

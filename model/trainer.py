@@ -9,8 +9,6 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from torch.utils.data import RandomSampler
 from tqdm import tqdm
-from transformers.modeling_bert import BertForMaskedLM
-from transformers.tokenization_bert import BertTokenizer
 from itertools import chain
 
 from model.seq2seq import TransformerSeq2Seq
