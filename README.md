@@ -1,6 +1,9 @@
 # GetToKnowYou
 Implementation of paper "Getting To Know You: User Attribute Extraction from Dialogues"
 
+## Warnning
+This is not an official code. We tried to re-produce the results of this paper due to our interest, and we no longer maintain this code regularly. Bugs may exist in this project.
+
 ## run
 Download "glove.6B.300d.txt" and put it under `glove`.
 
