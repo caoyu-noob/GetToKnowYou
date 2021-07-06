@@ -1,0 +1,15 @@
+CUDA_VISIBLE_DEVICES=0 python inference.py \
+--test_batch_size 64 \
+--batch_split 1 \
+--lr 2e-4 \
+--test_datasets datasets/triple/valid_both_original_final.txt \
+--test_datasets_cache datasets/triple/valid_both_original_final_cache \
+--vocab_path datasets/triple_valid_vocab \
+--data_type triple \
+--model_type seq2seq-rnn \
+--pointer_gen \
+--s2s_weight 1 \
+--beam_size 1 \
+--use_start_end \
+--limit_eval_size 200 \
+--load_last $The file path of your trainde model$ \
